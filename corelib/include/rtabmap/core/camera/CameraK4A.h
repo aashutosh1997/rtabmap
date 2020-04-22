@@ -33,6 +33,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "rtabmap/core/Camera.h"
 #include "rtabmap/core/Version.h"
 #include "rtabmap/utilite/UTimer.h"
+#include <k4a/k4a.h>
 
 namespace rtabmap
 {
@@ -71,6 +72,8 @@ private:
 	void* transformationHandle_;
 	CameraModel model_;
 	int deviceId_;
+	k4a_device_t device_;
+	k4a_device_configuration_t config_;
 	std::string fileName_;
 	bool ir_;
 	double previousStamp_;

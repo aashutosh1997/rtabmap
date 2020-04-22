@@ -61,7 +61,8 @@ CameraK4A::CameraK4A(
 	previousStamp_(0.0)
 #endif
 {
-	UERROR("CameraK4A: Live camera stream is not yet supported, only recorded mkv files are.");
+	//UERROR("CameraK4A: Live camera stream is not yet supported, only recorded mkv files are.");
+	device_ = NULL;
 }
 
 CameraK4A::CameraK4A(
@@ -96,11 +97,9 @@ void CameraK4A::close()
 	{
 		k4a_transformation_destroy((k4a_transformation_t)transformationHandle_);
 	}
-	/*
 	// Shut down the camera when finished with application logic
-	k4a_device_stop_cameras(device);
-	k4a_device_close(device);
-	*/
+	k4a_device_stop_cameras(device_);
+	k4a_device_close(device_);
 #endif
 }
 
@@ -170,47 +169,34 @@ bool CameraK4A::init(const std::string & calibrationFolder, const std::string & 
 	}
 	else if (deviceId_ >= 0)
 	{
-		UERROR("CameraK4A: Live camera stream is not yet supported, only recorded mkv files are.");
-		return false;
+		//UERROR("CameraK4A: Live camera stream is not yet supported, only recorded mkv files are.");
+		device_ = NULL;
+	 	if (K4A_RESULT_SUCCEEDED == k4a_device_open(deviceId_, &device_))
+        	std::cout<<"Opened the device successfully\n";
+		config_ = K4A_DEVICE_CONFIG_INIT_DISABLE_ALL;
+		config_.color_format = K4A_IMAGE_FORMAT_COLOR_BGRA32;
+    	config_.color_resolution = K4A_COLOR_RESOLUTION_720P;
+    	config_.depth_mode = K4A_DEPTH_MODE_WFOV_2X2BINNED;
+    	config_.camera_fps = K4A_FRAMES_PER_SECOND_30;
+    	config_.synchronized_images_only = true;
+		k4a_calibration_t calibration;
+		if (K4A_RESULT_SUCCEEDED !=
+        k4a_device_get_calibration(device_, config_.depth_mode, config_.color_resolution, &calibration))
+        	std::cout<<"Failed to get calibration\n";
 
-		/*uint32_t count = k4a_device_get_installed_count();
-		if (count == 0)
-		{
-			UERROR("No k4a devices attached!");
-			return false;
-		}
+		model_ = CameraModel(
+			calibration.color_camera_calibration.intrinsics.parameters.param.fx,
+			calibration.color_camera_calibration.intrinsics.parameters.param.fy,
+			calibration.color_camera_calibration.intrinsics.parameters.param.cx,
+			calibration.color_camera_calibration.intrinsics.parameters.param.cy,
+			this->getLocalTransform(),
+			0,
+			cv::Size(calibration.color_camera_calibration.resolution_width, calibration.color_camera_calibration.resolution_height));
 
-		// Open the first plugged in Kinect device
-		k4a_device_t device = NULL;
-		if (K4A_FAILED(k4a_device_open(K4A_DEVICE_DEFAULT, &device)))
-		{
-			UERROR("Failed to open k4a device!");
-			return false;
-		}
+		transformationHandle_ = k4a_transformation_create(&calibration);
 
-		// Get the size of the serial number
-		size_t serial_size = 0;
-		k4a_device_get_serialnum(device, NULL, &serial_size);
-
-		// Allocate memory for the serial, then acquire it
-		char *serial = (char*)(malloc(serial_size));
-		k4a_device_get_serialnum(device, serial, &serial_size);
-		UINFO("Opened device: %s", serial);
-		free(serial);
-
-		// Configure a stream of 4096x3072 BRGA color data at 15 frames per second
-		k4a_device_configuration_t config = K4A_DEVICE_CONFIG_INIT_DISABLE_ALL;
-		config.camera_fps = K4A_FRAMES_PER_SECOND_15;
-		config.color_format = K4A_IMAGE_FORMAT_COLOR_BGRA32;
-		config.color_resolution = K4A_COLOR_RESOLUTION_3072P;
-
-		// Start the camera with the given configuration
-		if (K4A_FAILED(k4a_device_start_cameras(device, &config)))
-		{
-			UERROR("Failed to start cameras!");
-			k4a_device_close(device);
-			return false;
-		}*/
+		if (K4A_RESULT_SUCCEEDED != k4a_device_start_cameras(device_, &config_))
+        	std::cout<<"Failed to start cameras\n";
 	}
 	
 	return true;
@@ -244,7 +230,6 @@ SensorData CameraK4A::captureImage(CameraInfo * info)
 	{
 		k4a_capture_t capture = NULL;
 		k4a_stream_result_t result = K4A_STREAM_RESULT_SUCCEEDED;
-
 		// wait to get all frames
 		UTimer time;
 		while (result == K4A_STREAM_RESULT_SUCCEEDED && time.elapsed() < 5.0)
@@ -443,7 +428,86 @@ SensorData CameraK4A::captureImage(CameraInfo * info)
 	}
 	else
 	{
-		UERROR("CameraK4A: Live camera stream is not yet supported, only recorded mkv files are.");
+		//UERROR("CameraK4A: Live camera stream is not yet supported, only recorded mkv files are.");
+		k4a_capture_t capture = NULL;
+		k4a_wait_result_t result = K4A_WAIT_RESULT_SUCCEEDED;
+		// wait to get all frames
+
+		while (result == K4A_WAIT_RESULT_SUCCEEDED)
+		{
+			result = k4a_device_get_capture(device_, &capture, 15000);
+
+			if (result == K4A_WAIT_RESULT_SUCCEEDED)
+			{
+				cv::Mat bgrCV;
+				cv::Mat depthCV;
+				double stamp = 0;
+
+				// Process capture here
+				
+				k4a_image_t color = k4a_capture_get_color_image(capture);
+				if (color != NULL)
+				{
+					UASSERT(k4a_image_get_format(color) == K4A_IMAGE_FORMAT_COLOR_MJPG || k4a_image_get_format(color) == K4A_IMAGE_FORMAT_COLOR_BGRA32);
+
+					if (k4a_image_get_format(color) == K4A_IMAGE_FORMAT_COLOR_MJPG)
+					{
+						bgrCV = uncompressImage(cv::Mat(1, (int)k4a_image_get_size(color), CV_8UC1, (void*)k4a_image_get_buffer(color)));
+						//UDEBUG("Uncompressed = %d %d %d", bgrCV.rows, bgrCV.cols, bgrCV.channels());
+					}
+					else
+					{
+						cv::Mat bgra(k4a_image_get_height_pixels(color), k4a_image_get_width_pixels(color), CV_8UC4, (void*)k4a_image_get_buffer(color));
+						cv::cvtColor(bgra, bgrCV, CV_BGRA2BGR);
+					}
+
+					// Release the image
+					k4a_image_release(color);
+				}
+				
+
+				if (!bgrCV.empty())
+				{
+					k4a_image_t depth = k4a_capture_get_depth_image(capture);
+					if (depth != NULL)
+					{
+						UASSERT(k4a_image_get_format(depth) == K4A_IMAGE_FORMAT_DEPTH16);
+
+						stamp = ((double)k4a_image_get_timestamp_usec(depth)) / 1000000;
+
+						
+						k4a_image_t transformedDepth;
+						if (k4a_image_create(k4a_image_get_format(depth), bgrCV.cols, bgrCV.rows, bgrCV.cols * 2, &transformedDepth) == K4A_RESULT_SUCCEEDED)
+						{
+							if (k4a_transformation_depth_image_to_color_camera((k4a_transformation_t)transformationHandle_, depth, transformedDepth) == K4A_RESULT_SUCCEEDED)
+							{
+								depthCV = cv::Mat(k4a_image_get_height_pixels(transformedDepth), k4a_image_get_width_pixels(transformedDepth), CV_16UC1, (void*)k4a_image_get_buffer(transformedDepth)).clone();
+							}
+							else
+							{
+								UERROR("Failed registration!");
+							}
+							k4a_image_release(transformedDepth);
+						}
+						else
+						{
+							UERROR("Failed allocating depth registered! (%d %d %d)", bgrCV.cols, bgrCV.rows, bgrCV.cols * 2);
+							}
+
+						k4a_image_release(depth);
+					}
+				}
+
+				k4a_capture_release(capture);
+				IMU imu;
+				if (!bgrCV.empty() && !depthCV.empty())
+				{
+					data = SensorData(bgrCV, depthCV, model_, this->getNextSeqID(), stamp);
+					data.setIMU(imu);
+					break;
+				}
+			}
+		}
 	}
 
 #else
